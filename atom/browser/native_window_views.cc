@@ -40,6 +40,10 @@
 #include "ui/gfx/x/x11_types.h"
 #include "ui/views/window/native_frame_view.h"
 #elif defined(OS_WIN)
+#include <WinUser.h>
+#include <Windows.h>
+#include "ui/views/win/hwnd_util.h"
+#include "atom/browser/FocusHandler.h"
 #include "atom/browser/ui/views/win_frame_view.h"
 #include "atom/browser/ui/win/atom_desktop_window_tree_host_win.h"
 #include "skia/ext/skia_utils_win.h"
@@ -47,6 +51,41 @@
 #include "ui/gfx/win/dpi.h"
 #include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
 #endif
+
+HHOOK g_hKeyboardHook;
+bool g_bKeyboardBool = false;
+
+LRESULT CALLBACK LowLevelKeyboardProc( int nCode, WPARAM wParam, LPARAM lParam )
+{
+    if (nCode < 0 || nCode != HC_ACTION )  // do not process message
+        return CallNextHookEx( g_hKeyboardHook, nCode, wParam, lParam);
+
+    bool bEatKeystroke = false;
+    KBDLLHOOKSTRUCT* pkbhs = (KBDLLHOOKSTRUCT*)lParam;
+    switch (wParam)
+    {
+        case WM_KEYDOWN:
+        case WM_KEYUP:
+        case WM_SYSKEYDOWN:
+        case WM_SYSKEYUP:
+        {
+          bEatKeystroke = (
+            ((pkbhs->vkCode == VK_LWIN) || (pkbhs->vkCode == VK_RWIN))
+            ||
+            ((pkbhs->vkCode == VK_TAB && pkbhs->flags & LLKHF_ALTDOWN))
+            ||
+            ((pkbhs->vkCode == VK_F4 && pkbhs->flags & LLKHF_ALTDOWN))
+            ||
+            ((pkbhs->vkCode == VK_ESCAPE))
+            );
+        }
+    }
+
+    if( bEatKeystroke )
+        return 1;
+    else
+        return CallNextHookEx( g_hKeyboardHook, nCode, wParam, lParam );
+}
 
 namespace atom {
 
@@ -605,7 +644,28 @@ void NativeWindowViews::SetSkipTaskbar(bool skip) {
 }
 
 void NativeWindowViews::SetKiosk(bool kiosk) {
-  SetFullScreen(kiosk);
+  //SetFullScreen(kiosk);
+  HWND hWnd = views::HWNDForWidget(window_.get());
+  FocusHandler* focusHandler = FocusHandler::getInstance(hWnd);
+
+  if(kiosk){
+    if(!g_bKeyboardBool){
+      g_hKeyboardHook = SetWindowsHookEx( WH_KEYBOARD_LL,  LowLevelKeyboardProc, GetModuleHandle(NULL), 0 );
+      g_bKeyboardBool = true;
+      FocusHandler::activeWindow(hWnd);
+      focusHandler->start();
+    }
+  }
+  else {
+    if(g_bKeyboardBool){
+      UnhookWindowsHookEx(g_hKeyboardHook);
+      g_bKeyboardBool = false;
+      if(focusHandler)
+      {
+        focusHandler->stop();
+      }
+    }
+  }
 }
 
 bool NativeWindowViews::IsKiosk() {
